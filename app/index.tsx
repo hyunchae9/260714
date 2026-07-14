@@ -14,8 +14,19 @@ import {
 import { useFonts } from "expo-font";
 import { Baloo2_400Regular, Baloo2_700Bold } from "@expo-google-fonts/baloo-2";
 import { Fredoka_500Medium, Fredoka_600SemiBold } from "@expo-google-fonts/fredoka";
+import { supabase } from "@/lib/supabase";
 
 const reactions = ["듣는 중", "좋았어요", "생각 많아짐", "다음 회차 기대"];
+const DRAFT_KEY = "podmate_draft_key";
+
+type SavedNote = {
+  note_key: string;
+  podcast_title: string | null;
+  episode_title: string | null;
+  thought: string | null;
+  friend_note: string | null;
+  reaction: string | null;
+};
 
 export default function HomeScreen() {
   const [loaded] = useFonts({
@@ -31,13 +42,100 @@ export default function HomeScreen() {
   const [thought, setThought] = useState("");
   const [friendNote, setFriendNote] = useState("");
   const [selectedReaction, setSelectedReaction] = useState("듣는 중");
+  const [statusMessage, setStatusMessage] = useState("");
+  const [isSaving, setIsSaving] = useState(false);
+  const [noteKey, setNoteKey] = useState("");
+  const [isLoading, setIsLoading] = useState(true);
 
   useEffect(() => {
     setMounted(true);
   }, []);
 
+  useEffect(() => {
+    const loadDraft = async () => {
+      try {
+        const storedKey =
+          Platform.OS === "web" ? globalThis.localStorage?.getItem(DRAFT_KEY) ?? "" : "";
+
+        if (!storedKey) {
+          setIsLoading(false);
+          return;
+        }
+
+        setNoteKey(storedKey);
+
+        const { data, error } = await supabase
+          .from("podcast_notes")
+          .select("note_key, podcast_title, episode_title, thought, friend_note, reaction")
+          .eq("note_key", storedKey)
+          .maybeSingle<SavedNote>();
+
+        if (error) {
+          setStatusMessage(`불러오기 실패: ${error.message}`);
+          setIsLoading(false);
+          return;
+        }
+
+        if (data) {
+          setPodcastTitle(data.podcast_title ?? "");
+          setEpisodeTitle(data.episode_title ?? "");
+          setThought(data.thought ?? "");
+          setFriendNote(data.friend_note ?? "");
+          setSelectedReaction(data.reaction ?? "듣는 중");
+        }
+      } finally {
+        setIsLoading(false);
+      }
+    };
+
+    void loadDraft();
+  }, []);
+
+  const handleSave = async () => {
+    setIsSaving(true);
+    setStatusMessage("");
+
+    const nextKey =
+      noteKey ||
+      (typeof crypto !== "undefined" && "randomUUID" in crypto
+        ? crypto.randomUUID()
+        : `${Date.now()}-${Math.random().toString(36).slice(2)}`);
+
+    const { error } = await supabase.from("podcast_notes").upsert({
+      note_key: nextKey,
+      podcast_title: podcastTitle.trim(),
+      episode_title: episodeTitle.trim(),
+      thought: thought.trim(),
+      friend_note: friendNote.trim(),
+      reaction: selectedReaction,
+    }, { onConflict: "note_key" });
+
+    if (error) {
+      setStatusMessage(`저장 실패: ${error.message}`);
+      setIsSaving(false);
+      return;
+    }
+
+    setNoteKey(nextKey);
+    if (Platform.OS === "web") {
+      globalThis.localStorage?.setItem(DRAFT_KEY, nextKey);
+    }
+    setStatusMessage("Supabase에 저장했어요.");
+    setIsSaving(false);
+  };
+
   if (!loaded) {
     return null;
+  }
+
+  if (isLoading) {
+    return (
+      <SafeAreaView style={styles.safeArea}>
+        <View style={[styles.container, styles.loadingWrap]}>
+          <Text style={styles.loadingText}>지난 기록 불러오는 중...</Text>
+        </View>
+      </SafeAreaView>
+    );
   }
 
   return (
@@ -152,6 +250,17 @@ export default function HomeScreen() {
               </View>
             </View>
           </View>
+
+          <TouchableOpacity
+            onPress={handleSave}
+            style={[styles.saveButton, isSaving && styles.saveButtonDisabled]}
+            activeOpacity={0.9}
+            disabled={isSaving}
+          >
+            <Text style={styles.saveButtonText}>{isSaving ? "저장 중..." : "Supabase에 저장하기"}</Text>
+          </TouchableOpacity>
+
+          {!!statusMessage && <Text style={styles.statusMessage}>{statusMessage}</Text>}
         </ScrollView>
       </KeyboardAvoidingView>
     </SafeAreaView>
@@ -336,5 +445,36 @@ const styles = StyleSheet.create({
     fontFamily: "Baloo2_700Bold",
     fontSize: 13,
     overflow: "hidden",
+  },
+  saveButton: {
+    marginTop: 6,
+    backgroundColor: "#FFB97A",
+    borderRadius: 18,
+    paddingVertical: 14,
+    alignItems: "center",
+  },
+  saveButtonDisabled: {
+    opacity: 0.7,
+  },
+  saveButtonText: {
+    color: "#FFFFFF",
+    fontFamily: "Fredoka_600SemiBold",
+    fontSize: 16,
+  },
+  statusMessage: {
+    fontFamily: "Baloo2_700Bold",
+    fontSize: 14,
+    color: "#6B3F2D",
+    textAlign: "center",
+  },
+  loadingWrap: {
+    justifyContent: "center",
+    alignItems: "center",
+    flex: 1,
+  },
+  loadingText: {
+    fontFamily: "Fredoka_600SemiBold",
+    fontSize: 18,
+    color: "#3B2A22",
   },
 });
